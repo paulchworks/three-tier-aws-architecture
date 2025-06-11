@@ -65,7 +65,7 @@ Parameters:
 Mappings:
   RegionToAMI:
     ap-southeast-1:
-      WindowsServer2022: ami-0e8a6e6c9de3385dc
+      WindowsServer2022: ami-0482455c4148846e3
 
 Resources:
   # VPC and Network Configuration
@@ -368,7 +368,7 @@ Resources:
   TotalAgilityInstance:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: !FindInMap [RegionToAMI, "ap-southeast-1", WindowsServer2022]
+      ImageId: ami-0482455c4148846e3
       InstanceType: c5.2xlarge  # 8 vCPU, 16 GB RAM (meets 4 core, 32GB requirement)
       KeyName: !Ref KeyPairName
       SubnetId: !Ref AppSubnet1
@@ -409,7 +409,7 @@ Resources:
   RPAInstance:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: !FindInMap [RegionToAMI, "ap-southeast-1", WindowsServer2022]
+      ImageId: ami-0482455c4148846e3
       InstanceType: c5.xlarge  # 4 vCPU, 8 GB RAM (meets 4 core requirement, can be upgraded to 16GB)
       KeyName: !Ref KeyPairName
       SubnetId: !Ref AppSubnet2
