@@ -1,0 +1,592 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-tier architecture for Tungsten TotalAgility and RPA with SQL Server 2022'
+
+Parameters:
+  EnvironmentName:
+    Description: Environment name (dev, test, prod)
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+  
+  VpcCIDR:
+    Description: CIDR block for the VPC
+    Type: String
+    Default: 10.0.0.0/16
+  
+  PublicSubnet1CIDR:
+    Description: CIDR block for Public Subnet 1
+    Type: String
+    Default: 10.0.1.0/24
+  
+  PublicSubnet2CIDR:
+    Description: CIDR block for Public Subnet 2
+    Type: String
+    Default: 10.0.2.0/24
+  
+  AppSubnet1CIDR:
+    Description: CIDR block for Application Subnet 1
+    Type: String
+    Default: 10.0.3.0/24
+  
+  AppSubnet2CIDR:
+    Description: CIDR block for Application Subnet 2
+    Type: String
+    Default: 10.0.4.0/24
+  
+  DBSubnet1CIDR:
+    Description: CIDR block for Database Subnet 1
+    Type: String
+    Default: 10.0.5.0/24
+  
+  DBSubnet2CIDR:
+    Description: CIDR block for Database Subnet 2
+    Type: String
+    Default: 10.0.6.0/24
+  
+  DBUsername:
+    Description: SQL Server admin username
+    Type: String
+    NoEcho: true
+  
+  DBPassword:
+    Description: SQL Server admin password
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    ConstraintDescription: Must be at least 8 characters
+  
+  KeyPairName:
+    Description: EC2 Key Pair for RDP access
+    Type: AWS::EC2::KeyPair::KeyName
+
+Mappings:
+  RegionToAMI:
+    ap-southeast-1:
+      WindowsServer2022: ami-0e8a6e6c9de3385dc
+
+Resources:
+  # VPC and Network Configuration
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-VPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-IGW
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  # Public Subnets (Web Tier)
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicSubnet1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicSubnet2
+
+  # Application Subnets (App Tier)
+  AppSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref AppSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-AppSubnet1
+
+  AppSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Ref AppSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-AppSubnet2
+
+  # Database Subnets (DB Tier)
+  DBSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref DBSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-DBSubnet1
+
+  DBSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Ref DBSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-DBSubnet2
+
+  # Route Tables and Routes
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicRouteTable
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  # NAT Gateway for private subnets
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-NatGateway
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PrivateRouteTable
+
+  DefaultPrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  AppSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref AppSubnet1
+
+  AppSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref AppSubnet2
+
+  DBSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref DBSubnet1
+
+  DBSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref DBSubnet2
+
+  # Security Groups
+  WebTierSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for web tier
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 3389
+          ToPort: 3389
+          CidrIp: 0.0.0.0/0  # In production, restrict to specific IP ranges
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-WebTierSG
+
+  AppTierSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for application tier
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref WebTierSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 3389
+          ToPort: 3389
+          CidrIp: 0.0.0.0/0  # In production, restrict to specific IP ranges
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-AppTierSG
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for database tier
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 1433
+          ToPort: 1433
+          SourceSecurityGroupId: !Ref AppTierSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 1433
+          ToPort: 1433
+          SourceSecurityGroupId: !Ref WebTierSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-DBSecurityGroup
+
+  # DB Subnet Group
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS SQL Server
+      SubnetIds:
+        - !Ref DBSubnet1
+        - !Ref DBSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-DBSubnetGroup
+
+  # RDS SQL Server Instance for TotalAgility
+  TotalAgilityDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: 100
+      MaxAllocatedStorage: 1000
+      DBInstanceClass: db.m6i.2xlarge
+      Engine: sqlserver-se
+      EngineVersion: 15.00.4236.7.v1  # SQL Server 2022
+      LicenseModel: license-included
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      MultiAZ: true
+      StorageType: gp3
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DBSecurityGroup
+      BackupRetentionPeriod: 7
+      DeleteAutomatedBackups: false
+      DeletionProtection: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-TotalAgilityDB
+
+  # RDS SQL Server Instance for RPA
+  RPADB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: 50
+      MaxAllocatedStorage: 500
+      DBInstanceClass: db.m6i.xlarge
+      Engine: sqlserver-se
+      EngineVersion: 15.00.4236.7.v1  # SQL Server 2022
+      LicenseModel: license-included
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      MultiAZ: true
+      StorageType: gp3
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DBSecurityGroup
+      BackupRetentionPeriod: 7
+      DeleteAutomatedBackups: false
+      DeletionProtection: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-RPADB
+
+  # TotalAgility EC2 Instance
+  TotalAgilityInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionToAMI, "ap-southeast-1", WindowsServer2022]
+      InstanceType: c5.2xlarge  # 8 vCPU, 16 GB RAM (meets 4 core, 32GB requirement)
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref AppSubnet1
+      SecurityGroupIds:
+        - !Ref AppTierSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 150  # 100GB for app + 50GB for OS
+            VolumeType: gp3
+            DeleteOnTermination: false
+      UserData:
+        Fn::Base64: !Sub |
+          <powershell>
+          # Install IIS with ASP.NET
+          Install-WindowsFeature -Name Web-Server,Web-Asp-Net45,Web-Net-Ext45,Web-ISAPI-Ext,Web-ISAPI-Filter,Web-Mgmt-Console,Web-Scripting-Tools
+
+          # Install .NET Framework 4.8
+          # Note: Windows Server 2022 comes with .NET Framework 4.8 pre-installed
+
+          # Create directory for TotalAgility
+          New-Item -Path "C:\TotalAgility" -ItemType Directory -Force
+
+          # Download and install Visual C++ Redistributable packages
+          $vcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+          $vcRedistPath = "C:\Windows\Temp\vc_redist.x64.exe"
+          Invoke-WebRequest -Uri $vcRedistUrl -OutFile $vcRedistPath
+          Start-Process -FilePath $vcRedistPath -ArgumentList "/install /quiet /norestart" -Wait
+
+          # Create a file to indicate setup is complete
+          New-Item -Path "C:\TotalAgility\setup_complete.txt" -ItemType File -Value "Initial setup completed at $(Get-Date)"
+          </powershell>
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-TotalAgilityServer
+
+  # RPA EC2 Instance
+  RPAInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionToAMI, "ap-southeast-1", WindowsServer2022]
+      InstanceType: c5.xlarge  # 4 vCPU, 8 GB RAM (meets 4 core requirement, can be upgraded to 16GB)
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref AppSubnet2
+      SecurityGroupIds:
+        - !Ref AppTierSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 100  # 50GB for app + 50GB for OS
+            VolumeType: gp3
+            DeleteOnTermination: false
+      UserData:
+        Fn::Base64: !Sub |
+          <powershell>
+          # Create directory for RPA
+          New-Item -Path "C:\RPA" -ItemType Directory -Force
+
+          # Install Java 17
+          $javaUrl = "https://download.oracle.com/java/17/latest/jdk-17_windows-x64_bin.exe"
+          $javaPath = "C:\Windows\Temp\jdk-17.exe"
+          Invoke-WebRequest -Uri $javaUrl -OutFile $javaPath
+          Start-Process -FilePath $javaPath -ArgumentList "/s" -Wait
+
+          # Download and install Apache Tomcat 9
+          $tomcatUrl = "https://dlcdn.apache.org/tomcat/tomcat-9/v9.0.99/bin/apache-tomcat-9.0.99.exe"
+          $tomcatPath = "C:\Windows\Temp\apache-tomcat-9.0.99.exe"
+          Invoke-WebRequest -Uri $tomcatUrl -OutFile $tomcatPath
+          Start-Process -FilePath $tomcatPath -ArgumentList "/S" -Wait
+
+          # Install Python 3.9
+          $pythonUrl = "https://www.python.org/ftp/python/3.9.13/python-3.9.13-amd64.exe"
+          $pythonPath = "C:\Windows\Temp\python-3.9.13-amd64.exe"
+          Invoke-WebRequest -Uri $pythonUrl -OutFile $pythonPath
+          Start-Process -FilePath $pythonPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -Wait
+
+          # Create a file to indicate setup is complete
+          New-Item -Path "C:\RPA\setup_complete.txt" -ItemType File -Value "Initial setup completed at $(Get-Date)"
+          </powershell>
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-RPAServer
+
+  # Load Balancer for TotalAgility
+  TotalAgilityALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${EnvironmentName}-TotalAgilityALB
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref WebTierSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-TotalAgilityALB
+
+  TotalAgilityTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-TotalAgilityTG
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      TargetType: instance
+      Targets:
+        - Id: !Ref TotalAgilityInstance
+          Port: 80
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-TotalAgilityTG
+
+  TotalAgilityListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TotalAgilityTargetGroup
+      LoadBalancerArn: !Ref TotalAgilityALB
+      Port: 80
+      Protocol: HTTP
+
+  # Load Balancer for RPA
+  RPAALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${EnvironmentName}-RPAALB
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref WebTierSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-RPAALB
+
+  RPATargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-RPATG
+      Port: 8080
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      TargetType: instance
+      Targets:
+        - Id: !Ref RPAInstance
+          Port: 8080
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-RPATG
+
+  RPAListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref RPATargetGroup
+      LoadBalancerArn: !Ref RPAALB
+      Port: 8080
+      Protocol: HTTP
+
+Outputs:
+  VPC:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${EnvironmentName}-VPCID
+
+  TotalAgilityALBDNSName:
+    Description: DNS Name of the TotalAgility ALB
+    Value: !GetAtt TotalAgilityALB.DNSName
+    Export:
+      Name: !Sub ${EnvironmentName}-TotalAgilityALBDNSName
+
+  RPAALBDNSName:
+    Description: DNS Name of the RPA ALB
+    Value: !GetAtt RPAALB.DNSName
+    Export:
+      Name: !Sub ${EnvironmentName}-RPAALBDNSName
+
+  TotalAgilityDBEndpoint:
+    Description: Endpoint of the TotalAgility SQL Server RDS instance
+    Value: !GetAtt TotalAgilityDB.Endpoint.Address
+    Export:
+      Name: !Sub ${EnvironmentName}-TotalAgilityDBEndpoint
+
+  RPADBEndpoint:
+    Description: Endpoint of the RPA SQL Server RDS instance
+    Value: !GetAtt RPADB.Endpoint.Address
+    Export:
+      Name: !Sub ${EnvironmentName}-RPADBEndpoint
+
+  TotalAgilityInstanceIP:
+    Description: Private IP of the TotalAgility instance
+    Value: !GetAtt TotalAgilityInstance.PrivateIp
+    Export:
+      Name: !Sub ${EnvironmentName}-TotalAgilityInstanceIP
+
+  RPAInstanceIP:
+    Description: Private IP of the RPA instance
+    Value: !GetAtt RPAInstance.PrivateIp
+    Export:
+      Name: !Sub ${EnvironmentName}-RPAInstanceIP
