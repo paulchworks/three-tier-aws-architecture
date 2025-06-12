@@ -1,0 +1,26 @@
+############## Apache Tomcat #######
+
+Download Apache Tomcat
+Then install Java
+
+
+PS C:\Program Files\Apache Software Foundation\apache-tomcat-9.0.106\bin> ./startup.bat
+PS C:\Program Files\Apache Software Foundation\apache-tomcat-9.0.106\bin> $healthContent = "OK"
+PS C:\Program Files\Apache Software Foundation\apache-tomcat-9.0.106\bin> New-Item -Path "C:\Program Files\Apache Software Foundation\apache-tomcat-9.0.106\webapps\ROOT" -ItemType Directory -Force
+>> Set-Content -Path "C:\Program Files\Apache Software Foundation\apache-tomcat-9.0.106\webapps\ROOT\health.html" -Value $healthContent
+
+# Install Tomcat as a Windows service
+cd "C:\Program Files\Apache Software Foundation\apache-tomcat-9.0.106\bin"
+.\service.bat install
+
+############ PYTHON ###########################
+# Create a simple HTTP server with Python
+New-Item -Path "C:\pythonweb" -ItemType Directory -Force
+Set-Content -Path "C:\pythonweb\health.html" -Value "OK"
+
+# Start Python HTTP server on port 8080
+Start-Process -FilePath "python" -ArgumentList "-m http.server 8080 --directory C:\pythonweb" -NoNewWindow
+
+# Verify it's working
+Start-Sleep -Seconds 2
+Invoke-WebRequest -Uri "http://localhost:8080/health.html"
