@@ -68,6 +68,32 @@ Mappings:
       WindowsServer2022: ami-0482455c4148846e3
 
 Resources:
+  # IAM Role for EC2 instances
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-EC2InstanceRole
+
+  # Instance Profile for the role
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2InstanceRole
+
   # VPC and Network Configuration
   VPC:
     Type: AWS::EC2::VPC
@@ -374,6 +400,7 @@ Resources:
       SubnetId: !Ref AppSubnet1
       SecurityGroupIds:
         - !Ref AppTierSecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs:
@@ -398,6 +425,9 @@ Resources:
           Invoke-WebRequest -Uri $vcRedistUrl -OutFile $vcRedistPath
           Start-Process -FilePath $vcRedistPath -ArgumentList "/install /quiet /norestart" -Wait
 
+          # Open port 80 in Windows Firewall
+          New-NetFirewallRule -DisplayName "Allow HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow
+
           # Create a file to indicate setup is complete
           New-Item -Path "C:\TotalAgility\setup_complete.txt" -ItemType File -Value "Initial setup completed at $(Get-Date)"
           </powershell>
@@ -415,6 +445,7 @@ Resources:
       SubnetId: !Ref AppSubnet2
       SecurityGroupIds:
         - !Ref AppTierSecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs:
@@ -444,6 +475,9 @@ Resources:
           $pythonPath = "C:\Windows\Temp\python-3.9.13-amd64.exe"
           Invoke-WebRequest -Uri $pythonUrl -OutFile $pythonPath
           Start-Process -FilePath $pythonPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -Wait
+
+          # Open port 8080 in Windows Firewall
+          New-NetFirewallRule -DisplayName "Allow Tomcat" -Direction Inbound -LocalPort 8080 -Protocol TCP -Action Allow
 
           # Create a file to indicate setup is complete
           New-Item -Path "C:\RPA\setup_complete.txt" -ItemType File -Value "Initial setup completed at $(Get-Date)"
