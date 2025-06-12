@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AWS Cloud Architecture Diagram with Security Groups</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+        }
+        h1 {
+            text-align: center;
+            padding: 20px;
+            background-color: #0073e6;
+            color: white;
+        }
+        .diagram-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 90vh;
+            flex-direction: column;
+        }
+        .layer {
+            border: 2px solid #0073e6;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 15px;
+            background-color: white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            min-width: 80%;
+            text-align: center;
+        }
+        .layer-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #0073e6;
+        }
+        .components {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 15px;
+        }
+        .component {
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 10px;
+            width: 200px;
+            background-color: #fff;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .component-title {
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #333;
+        }
+        .line {
+            width: 100%;
+            height: 2px;
+            background-color: #0073e6;
+            margin: 10px 0;
+        }
+        .security-group {
+            border: 1px solid #aaa;
+            border-radius: 5px;
+            padding: 10px;
+            width: 300px;
+            background-color: #f9f9f9;
+            margin-top: 10px;
+        }
+        .security-group-title {
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #555;
+        }
+        .rules {
+            font-size: 12px;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+    <h1>Three-Tier AWS Architecture for Tungsten TotalAgility and RPA with Security Groups</h1>
+    <div class="diagram-container">
+        <!-- Web Tier -->
+        <div class="layer">
+            <div class="layer-title">Web Tier (Public Subnets)</div>
+            <div class="components">
+                <div class="component">
+                    <div class="component-title">TotalAgility ALB</div>
+                    <p>Internet-facing Load Balancer</p>
+                </div>
+                <div class="component">
+                    <div class="component-title">RPA ALB</div>
+                    <p>Internet-facing Load Balancer for RPA service</p>
+                </div>
+                <div class="component">
+                    <div class="component-title">Bastion Host</div>
+                    <p>Secure access to private instances</p>
+                </div>
+                <div class="component security-group">
+                    <div class="component-title">Security Group: WebTierSG</div>
+                    <div class="rules">
+                        <strong>Inbound Rules:</strong><br>
+                        - HTTP (Port 80) from 0.0.0.0/0<br>
+                        - HTTPS (Port 443) from 0.0.0.0/0<br>
+                        - RDP (Port 3389) from 0.0.0.0/0<br>
+                        - Custom TCP (Port 8080) from 0.0.0.0/0<br>
+                        <strong>Outbound:</strong> All traffic allowed.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="line"></div>
+
+        <!-- Application Tier -->
+        <div class="layer">
+            <div class="layer-title">Application Tier (Private Subnets)</div>
+            <div class="components">
+                <div class="component">
+                    <div class="component-title">TotalAgility Auto Scaling Group</div>
+                    <p>IIS with ASP.NET application</p>
+                </div>
+                <div class="component">
+                    <div class="component-title">RPA Auto Scaling Group</div>
+                    <p>Tomcat server running RPA services</p>
+                </div>
+                <div class="component security-group">
+                    <div class="component-title">Security Group: AppTierSG</div>
+                    <div class="rules">
+                        <strong>Inbound Rules:</strong><br>
+                        - HTTP (Port 80) from WebTierSG<br>
+                        - HTTP (Port 8080) from WebTierSG<br>
+                        - RDP (Port 3389) from BastionSG<br>
+                        <strong>Outbound:</strong> All traffic allowed.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="line"></div>
+
+        <!-- Database Tier -->
+        <div class="layer">
+            <div class="layer-title">Database Tier (Private Subnets)</div>
+            <div class="components">
+                <div class="component">
+                    <div class="component-title">TotalAgility DB</div>
+                    <p>RDS SQL Server instance</p>
+                </div>
+                <div class="component">
+                    <div class="component-title">RPA DB</div>
+                    <p>RDS SQL Server instance</p>
+                </div>
+                <div class="component security-group">
+                    <div class="component-title">Security Group: DBSecurityGroup</div>
+                    <div class="rules">
+                        <strong>Inbound Rules:</strong><br>
+                        - MS SQL (Port 1433) from AppTierSG and WebTierSG<br>
+                        <strong>Outbound:</strong> All traffic allowed.
+                    </div>
+                </div>
+                <div class="component security-group">
+                    <div class="component-title">Security Group: BastionSG</div>
+                    <div class="rules">
+                        <strong>Inbound Rules:</strong><br>
+                        - RDP (Port 3389) from 0.0.0.0/0<br>
+                        <strong>Outbound:</strong> All traffic allowed.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
