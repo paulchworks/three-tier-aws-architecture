@@ -290,6 +290,10 @@ Resources:
           FromPort: 3389
           ToPort: 3389
           CidrIp: 0.0.0.0/0  # In production, restrict to specific IP ranges
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0  # Added for RPA service
       Tags:
         - Key: Name
           Value: !Sub ${EnvironmentName}-WebTierSG
@@ -507,7 +511,7 @@ Resources:
     Type: AWS::EC2::LaunchTemplate
     Properties:
       LaunchTemplateName: !Sub ${EnvironmentName}-RPA-LT
-      VersionDescription: Initial version
+      VersionDescription: Initial version with fixed health check
       LaunchTemplateData:
         ImageId: ami-0482455c4148846e3
         InstanceType: c5.xlarge
@@ -554,10 +558,28 @@ Resources:
             # Open port 8080 in Windows Firewall
             New-NetFirewallRule -DisplayName "Allow Tomcat" -Direction Inbound -LocalPort 8080 -Protocol TCP -Action Allow
 
-            # Create a simple health check page for Tomcat
+            # Start Tomcat service
+            Start-Service -Name "Tomcat9"
+
+            # Create health check file in the correct location
             $healthContent = "OK"
             New-Item -Path "C:\Program Files\Apache Software Foundation\Tomcat 9.0\webapps\ROOT" -ItemType Directory -Force
             Set-Content -Path "C:\Program Files\Apache Software Foundation\Tomcat 9.0\webapps\ROOT\health.html" -Value $healthContent
+
+            # Create a simple index page
+            $indexContent = @"
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>RPA Server</title>
+            </head>
+            <body>
+                <h1>RPA Server is running</h1>
+                <p>Server is operational.</p>
+            </body>
+            </html>
+            "@
+            Set-Content -Path "C:\Program Files\Apache Software Foundation\Tomcat 9.0\webapps\ROOT\index.html" -Value $indexContent
 
             # Create a file to indicate setup is complete
             New-Item -Path "C:\RPA\setup_complete.txt" -ItemType File -Value "Initial setup completed at $(Get-Date)"
@@ -709,6 +731,8 @@ Resources:
       Protocol: HTTP
       VpcId: !Ref VPC
       HealthCheckPath: /health.html
+      HealthCheckPort: "8080"
+      HealthCheckProtocol: HTTP
       HealthCheckIntervalSeconds: 30
       HealthCheckTimeoutSeconds: 10
       HealthyThresholdCount: 2
