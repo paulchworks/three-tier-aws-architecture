@@ -1,18 +1,21 @@
 # Three-tier AWS Architecture
 
-The three-tier architecture template includes:
+##Both EC2 instances are in private subnets:
 
-- Web tier with:
--- Public subnets
--- Auto Scaling Group with EC2 instances
--- Internet-facing Application Load Balancer
-- Application tier with:
--- Private subnets
--- Auto Scaling Group with EC2 instances
--- Internal Application Load Balancer
-- Database tier with:
--- Private subnets
--- Multi-AZ SQL Server 2022 RDS instance
--- Proper security isolation
+TotalAgility instance is in AppSubnet1 (private)
 
-The template follows AWS best practices with proper network segmentation, security groups, and high availability configurations. You can now use this template to deploy your three-tier architecture in the ap-southeast-1 region.
+- RPA instance is in AppSubnet2 (private)
+
+## Each application has its own dedicated ALB:
+
+- TotalAgilityALB for the TotalAgility application (listening on port 80)
+
+- RPAALB for the RPA application (listening on port 8080)
+
+## Both ALBs are internet-facing and placed in public subnets:
+
+- They're in PublicSubnet1 and PublicSubnet2
+
+- They have security groups allowing inbound traffic on their respective ports
+
+This architecture follows the best practice of keeping application servers in private subnets for security while exposing services through load balancers in public subnets.
