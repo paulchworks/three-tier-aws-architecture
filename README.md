@@ -1,3 +1,5 @@
+![image](https://github.com/user-attachments/assets/e9bf95b4-135b-4b61-888b-6d9bcaae8f95)
+
 # Three-tier AWS Architecture
 
 ##Both EC2 instances are in private subnets:
