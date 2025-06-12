@@ -293,6 +293,20 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub ${EnvironmentName}-WebTierSG
+          
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for bastion host
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3389
+          ToPort: 3389
+          CidrIp: 0.0.0.0/0  # In production, restrict to specific IP ranges
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-BastionSG
 
   AppTierSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -307,7 +321,11 @@ Resources:
         - IpProtocol: tcp
           FromPort: 3389
           ToPort: 3389
-          CidrIp: 0.0.0.0/0  # In production, restrict to specific IP ranges
+          SourceSecurityGroupId: !Ref BastionSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref WebTierSecurityGroup
       Tags:
         - Key: Name
           Value: !Sub ${EnvironmentName}-AppTierSG
@@ -390,101 +408,235 @@ Resources:
         - Key: Name
           Value: !Sub ${EnvironmentName}-RPADB
 
-  # TotalAgility EC2 Instance
-  TotalAgilityInstance:
-    Type: AWS::EC2::Instance
+  # TotalAgility Launch Template
+  TotalAgilityLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
     Properties:
-      ImageId: ami-0482455c4148846e3
-      InstanceType: c5.2xlarge  # 8 vCPU, 16 GB RAM (meets 4 core, 32GB requirement)
-      KeyName: !Ref KeyPairName
-      SubnetId: !Ref AppSubnet1
-      SecurityGroupIds:
-        - !Ref AppTierSecurityGroup
-      IamInstanceProfile: !Ref EC2InstanceProfile
-      BlockDeviceMappings:
-        - DeviceName: /dev/sda1
-          Ebs:
-            VolumeSize: 150  # 100GB for app + 50GB for OS
-            VolumeType: gp3
-            DeleteOnTermination: false
-      UserData:
-        Fn::Base64: !Sub |
-          <powershell>
-          # Install IIS with ASP.NET
-          Install-WindowsFeature -Name Web-Server,Web-Asp-Net45,Web-Net-Ext45,Web-ISAPI-Ext,Web-ISAPI-Filter,Web-Mgmt-Console,Web-Scripting-Tools
+      LaunchTemplateName: !Sub ${EnvironmentName}-TotalAgility-LT
+      VersionDescription: Initial version
+      LaunchTemplateData:
+        ImageId: ami-0482455c4148846e3
+        InstanceType: c5.2xlarge
+        KeyName: !Ref KeyPairName
+        SecurityGroupIds:
+          - !Ref AppTierSecurityGroup
+        IamInstanceProfile:
+          Name: !Ref EC2InstanceProfile
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: 150
+              VolumeType: gp3
+              DeleteOnTermination: false
+        UserData:
+          Fn::Base64: !Sub |
+            <powershell>
+            # Enable multiple RDP sessions
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "MaxInstanceCount" -Value 5
+            Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+            
+            # Install IIS with ASP.NET
+            Install-WindowsFeature -Name Web-Server,Web-Asp-Net45,Web-Net-Ext45,Web-ISAPI-Ext,Web-ISAPI-Filter,Web-Mgmt-Console,Web-Scripting-Tools
 
-          # Install .NET Framework 4.8
-          # Note: Windows Server 2022 comes with .NET Framework 4.8 pre-installed
+            # Create directory for TotalAgility
+            New-Item -Path "C:\TotalAgility" -ItemType Directory -Force
 
-          # Create directory for TotalAgility
-          New-Item -Path "C:\TotalAgility" -ItemType Directory -Force
+            # Download and install Visual C++ Redistributable packages
+            $vcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+            $vcRedistPath = "C:\Windows\Temp\vc_redist.x64.exe"
+            Invoke-WebRequest -Uri $vcRedistUrl -OutFile $vcRedistPath
+            Start-Process -FilePath $vcRedistPath -ArgumentList "/install /quiet /norestart" -Wait
 
-          # Download and install Visual C++ Redistributable packages
-          $vcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
-          $vcRedistPath = "C:\Windows\Temp\vc_redist.x64.exe"
-          Invoke-WebRequest -Uri $vcRedistUrl -OutFile $vcRedistPath
-          Start-Process -FilePath $vcRedistPath -ArgumentList "/install /quiet /norestart" -Wait
+            # Open port 80 in Windows Firewall
+            New-NetFirewallRule -DisplayName "Allow HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow
 
-          # Open port 80 in Windows Firewall
-          New-NetFirewallRule -DisplayName "Allow HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow
+            # Create a simple landing page
+            $htmlContent = @"
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>TotalAgility Server</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
+                    h1 { color: #0066cc; }
+                </style>
+            </head>
+            <body>
+                <h1>TotalAgility Server is running</h1>
+                <p>The server is operational and ready to serve requests.</p>
+                <p>Server Time: $([DateTime]::Now.ToString("yyyy-MM-dd HH:mm:ss"))</p>
+            </body>
+            </html>
+            "@
+            Set-Content -Path "C:\inetpub\wwwroot\index.html" -Value $htmlContent
 
-          # Create a file to indicate setup is complete
-          New-Item -Path "C:\TotalAgility\setup_complete.txt" -ItemType File -Value "Initial setup completed at $(Get-Date)"
-          </powershell>
+            # Create a health check page
+            $healthContent = "OK"
+            Set-Content -Path "C:\inetpub\wwwroot\health.html" -Value $healthContent
+
+            # Create a file to indicate setup is complete
+            New-Item -Path "C:\TotalAgility\setup_complete.txt" -ItemType File -Value "Initial setup completed at $(Get-Date)"
+            </powershell>
+
+  # TotalAgility Auto Scaling Group
+  TotalAgilityASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${EnvironmentName}-TotalAgility-ASG
+      LaunchTemplate:
+        LaunchTemplateId: !Ref TotalAgilityLaunchTemplate
+        Version: !GetAtt TotalAgilityLaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 3
+      DesiredCapacity: 1
+      VPCZoneIdentifier:
+        - !Ref AppSubnet1
+        - !Ref AppSubnet2
+      TargetGroupARNs:
+        - !Ref TotalAgilityTargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
       Tags:
         - Key: Name
           Value: !Sub ${EnvironmentName}-TotalAgilityServer
+          PropagateAtLaunch: true
 
-  # RPA EC2 Instance
-  RPAInstance:
+  # RPA Launch Template
+  RPALaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${EnvironmentName}-RPA-LT
+      VersionDescription: Initial version
+      LaunchTemplateData:
+        ImageId: ami-0482455c4148846e3
+        InstanceType: c5.xlarge
+        KeyName: !Ref KeyPairName
+        SecurityGroupIds:
+          - !Ref AppTierSecurityGroup
+        IamInstanceProfile:
+          Name: !Ref EC2InstanceProfile
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: 100
+              VolumeType: gp3
+              DeleteOnTermination: false
+        UserData:
+          Fn::Base64: !Sub |
+            <powershell>
+            # Enable multiple RDP sessions
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "MaxInstanceCount" -Value 5
+            Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+            
+            # Create directory for RPA
+            New-Item -Path "C:\RPA" -ItemType Directory -Force
+
+            # Install Java 17
+            $javaUrl = "https://download.oracle.com/java/17/latest/jdk-17_windows-x64_bin.exe"
+            $javaPath = "C:\Windows\Temp\jdk-17.exe"
+            Invoke-WebRequest -Uri $javaUrl -OutFile $javaPath
+            Start-Process -FilePath $javaPath -ArgumentList "/s" -Wait
+
+            # Download and install Apache Tomcat 9
+            $tomcatUrl = "https://dlcdn.apache.org/tomcat/tomcat-9/v9.0.99/bin/apache-tomcat-9.0.99.exe"
+            $tomcatPath = "C:\Windows\Temp\apache-tomcat-9.0.99.exe"
+            Invoke-WebRequest -Uri $tomcatUrl -OutFile $tomcatPath
+            Start-Process -FilePath $tomcatPath -ArgumentList "/S" -Wait
+
+            # Install Python 3.9
+            $pythonUrl = "https://www.python.org/ftp/python/3.9.13/python-3.9.13-amd64.exe"
+            $pythonPath = "C:\Windows\Temp\python-3.9.13-amd64.exe"
+            Invoke-WebRequest -Uri $pythonUrl -OutFile $pythonPath
+            Start-Process -FilePath $pythonPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -Wait
+
+            # Open port 8080 in Windows Firewall
+            New-NetFirewallRule -DisplayName "Allow Tomcat" -Direction Inbound -LocalPort 8080 -Protocol TCP -Action Allow
+
+            # Create a simple health check page for Tomcat
+            $healthContent = "OK"
+            New-Item -Path "C:\Program Files\Apache Software Foundation\Tomcat 9.0\webapps\ROOT" -ItemType Directory -Force
+            Set-Content -Path "C:\Program Files\Apache Software Foundation\Tomcat 9.0\webapps\ROOT\health.html" -Value $healthContent
+
+            # Create a file to indicate setup is complete
+            New-Item -Path "C:\RPA\setup_complete.txt" -ItemType File -Value "Initial setup completed at $(Get-Date)"
+            </powershell>
+
+  # RPA Auto Scaling Group
+  RPAASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${EnvironmentName}-RPA-ASG
+      LaunchTemplate:
+        LaunchTemplateId: !Ref RPALaunchTemplate
+        Version: !GetAtt RPALaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 2
+      DesiredCapacity: 1
+      VPCZoneIdentifier:
+        - !Ref AppSubnet1
+        - !Ref AppSubnet2
+      TargetGroupARNs:
+        - !Ref RPATargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-RPAServer
+          PropagateAtLaunch: true
+
+  # Bastion Host
+  BastionHost:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: ami-0482455c4148846e3
-      InstanceType: c5.xlarge  # 4 vCPU, 8 GB RAM (meets 4 core requirement, can be upgraded to 16GB)
+      ImageId: '{{resolve:ssm:/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base}}'
+      InstanceType: t3.medium
       KeyName: !Ref KeyPairName
-      SubnetId: !Ref AppSubnet2
+      SubnetId: !Ref PublicSubnet1
       SecurityGroupIds:
-        - !Ref AppTierSecurityGroup
+        - !Ref BastionSecurityGroup
       IamInstanceProfile: !Ref EC2InstanceProfile
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs:
-            VolumeSize: 100  # 50GB for app + 50GB for OS
+            VolumeSize: 50
             VolumeType: gp3
-            DeleteOnTermination: false
+            DeleteOnTermination: true
       UserData:
         Fn::Base64: !Sub |
           <powershell>
-          # Create directory for RPA
-          New-Item -Path "C:\RPA" -ItemType Directory -Force
-
-          # Install Java 17
-          $javaUrl = "https://download.oracle.com/java/17/latest/jdk-17_windows-x64_bin.exe"
-          $javaPath = "C:\Windows\Temp\jdk-17.exe"
-          Invoke-WebRequest -Uri $javaUrl -OutFile $javaPath
-          Start-Process -FilePath $javaPath -ArgumentList "/s" -Wait
-
-          # Download and install Apache Tomcat 9
-          $tomcatUrl = "https://dlcdn.apache.org/tomcat/tomcat-9/v9.0.99/bin/apache-tomcat-9.0.99.exe"
-          $tomcatPath = "C:\Windows\Temp\apache-tomcat-9.0.99.exe"
-          Invoke-WebRequest -Uri $tomcatUrl -OutFile $tomcatPath
-          Start-Process -FilePath $tomcatPath -ArgumentList "/S" -Wait
-
-          # Install Python 3.9
-          $pythonUrl = "https://www.python.org/ftp/python/3.9.13/python-3.9.13-amd64.exe"
-          $pythonPath = "C:\Windows\Temp\python-3.9.13-amd64.exe"
-          Invoke-WebRequest -Uri $pythonUrl -OutFile $pythonPath
-          Start-Process -FilePath $pythonPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -Wait
-
-          # Open port 8080 in Windows Firewall
-          New-NetFirewallRule -DisplayName "Allow Tomcat" -Direction Inbound -LocalPort 8080 -Protocol TCP -Action Allow
-
-          # Create a file to indicate setup is complete
-          New-Item -Path "C:\RPA\setup_complete.txt" -ItemType File -Value "Initial setup completed at $(Get-Date)"
+          # Install Remote Server Administration Tools
+          Install-WindowsFeature -Name RSAT-RDS-Tools
+          
+          # Create a welcome message with connection instructions
+          $welcomeMessage = @"
+          =====================================================
+          WELCOME TO THE BASTION HOST
+          =====================================================
+          
+          Use this server to connect to private instances in the Auto Scaling Groups.
+          
+          To find the current instances:
+          1. Open PowerShell
+          2. Run: aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names ${EnvironmentName}-TotalAgility-ASG ${EnvironmentName}-RPA-ASG
+          
+          To connect, use Remote Desktop Connection and enter
+          the private IP of the target server.
+          =====================================================
+          "@
+          
+          Set-Content -Path "C:\Users\Public\Desktop\CONNECTION-INSTRUCTIONS.txt" -Value $welcomeMessage
+          
+          # Install AWS CLI
+          $awsCliUrl = "https://awscli.amazonaws.com/AWSCLIV2.msi"
+          $awsCliPath = "C:\Windows\Temp\AWSCLIV2.msi"
+          Invoke-WebRequest -Uri $awsCliUrl -OutFile $awsCliPath
+          Start-Process -FilePath msiexec.exe -ArgumentList "/i $awsCliPath /quiet /norestart" -Wait
           </powershell>
       Tags:
         - Key: Name
-          Value: !Sub ${EnvironmentName}-RPAServer
+          Value: !Sub ${EnvironmentName}-BastionHost
 
   # Load Balancer for TotalAgility
   TotalAgilityALB:
@@ -494,7 +646,7 @@ Resources:
       Scheme: internet-facing
       LoadBalancerAttributes:
         - Key: idle_timeout.timeout_seconds
-          Value: '60'
+          Value: '120'
       Subnets:
         - !Ref PublicSubnet1
         - !Ref PublicSubnet2
@@ -511,15 +663,12 @@ Resources:
       Port: 80
       Protocol: HTTP
       VpcId: !Ref VPC
-      HealthCheckPath: /
+      HealthCheckPath: /health.html
       HealthCheckIntervalSeconds: 30
-      HealthCheckTimeoutSeconds: 5
+      HealthCheckTimeoutSeconds: 10
       HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 5
+      UnhealthyThresholdCount: 3
       TargetType: instance
-      Targets:
-        - Id: !Ref TotalAgilityInstance
-          Port: 80
       Tags:
         - Key: Name
           Value: !Sub ${EnvironmentName}-TotalAgilityTG
@@ -542,7 +691,7 @@ Resources:
       Scheme: internet-facing
       LoadBalancerAttributes:
         - Key: idle_timeout.timeout_seconds
-          Value: '60'
+          Value: '120'
       Subnets:
         - !Ref PublicSubnet1
         - !Ref PublicSubnet2
@@ -559,15 +708,12 @@ Resources:
       Port: 8080
       Protocol: HTTP
       VpcId: !Ref VPC
-      HealthCheckPath: /
+      HealthCheckPath: /health.html
       HealthCheckIntervalSeconds: 30
-      HealthCheckTimeoutSeconds: 5
+      HealthCheckTimeoutSeconds: 10
       HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 5
+      UnhealthyThresholdCount: 3
       TargetType: instance
-      Targets:
-        - Id: !Ref RPAInstance
-          Port: 8080
       Tags:
         - Key: Name
           Value: !Sub ${EnvironmentName}-RPATG
@@ -612,15 +758,21 @@ Outputs:
     Value: !GetAtt RPADB.Endpoint.Address
     Export:
       Name: !Sub ${EnvironmentName}-RPADBEndpoint
-
-  TotalAgilityInstanceIP:
-    Description: Private IP of the TotalAgility instance
-    Value: !GetAtt TotalAgilityInstance.PrivateIp
+      
+  BastionHostPublicIP:
+    Description: Public IP of the Bastion Host
+    Value: !GetAtt BastionHost.PublicIp
     Export:
-      Name: !Sub ${EnvironmentName}-TotalAgilityInstanceIP
+      Name: !Sub ${EnvironmentName}-BastionHostPublicIP
 
-  RPAInstanceIP:
-    Description: Private IP of the RPA instance
-    Value: !GetAtt RPAInstance.PrivateIp
+  TotalAgilityASGName:
+    Description: Name of the TotalAgility Auto Scaling Group
+    Value: !Ref TotalAgilityASG
     Export:
-      Name: !Sub ${EnvironmentName}-RPAInstanceIP
+      Name: !Sub ${EnvironmentName}-TotalAgilityASGName
+
+  RPAASGName:
+    Description: Name of the RPA Auto Scaling Group
+    Value: !Ref RPAASG
+    Export:
+      Name: !Sub ${EnvironmentName}-RPAASGName
